@@ -1,0 +1,118 @@
+version: '3'
+services:
+  keycloak:
+    container_name: keycloak
+    image: quay.io/keycloak/keycloak:22.0.5
+    command: [ "start-dev", "--import-realm" ]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8181
+    ports:
+      - "8181:8181"
+    volumes:
+      - ./realms/:/opt/keycloak/data/import/
+
+  # Mongo DB for product service
+  mongo:
+    container_name: mongo
+    image: mongo:4.4.14-rc0-focal
+    restart: always
+    ports:
+      - "27017:27017"
+    expose:
+      - "27017"
+  #    volumes:
+  #      - ./mongo-data:/data/db
+
+  ## MySQL For Order Service
+  mysql:
+    container_name: mysql
+    image: mysql:8.0
+    restart: always
+    ports:
+      - "3308:3308"
+    expose:
+      - '3308'
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: TRUE
+      MYSQL_TCP_PORT: 3308
+    volumes:
+       - ./init:/docker-entrypoint-initdb.d
+
+  discovery-server:
+    container_name: discovery-server
+    restart: always
+    image: nghitruong/eureka-discovery-server:latest
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+
+  api-gateway:
+    container_name: api-gateway
+    image: nghitruong/api-gateway:latest
+    ports:
+      - "8080:8080"
+    expose:
+      - "8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY=TRACE
+      - eureka.client.serviceUrl.defaultZone= http://discovery-server:8761/eureka
+      - spring.security.oauth2.resourceserver.jwt.issuer-uri=http://keycloak:8181/realms/spring-react-realm
+      - keycloak.auth-server-url=http://keycloak:8181
+    #      - app.server.keycloak.origin= http://localhost:8181
+    depends_on:
+      - discovery-server
+      - keycloak
+
+  ## Product-Service
+  product-service:
+    container_name: product-service
+    image: nghitruong/product-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE= docker
+      - eureka.client.serviceUrl.defaultZone= http://discovery-server:8761/eureka
+    depends_on:
+      - mongo
+      - discovery-server
+      - api-gateway
+
+  # Order-Service
+  order-service:
+    container_name: order-service
+    image: nghitruong/order-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL= jdbc:mysql://mysql:3308/ts_order_service
+      - eureka.client.serviceUrl.defaultZone= http://discovery-server:8761/eureka
+    depends_on:
+      - mysql
+      - discovery-server
+      - api-gateway
+
+  ## Inventory-Service Docker Compose Config
+  inventory-service:
+    container_name: inventory-service
+    image: nghitruong/inventory-service:latest
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3308/ts_inventory_service
+      - eureka.client.serviceUrl.defaultZone= http://discovery-server:8761/eureka
+    depends_on:
+      - mysql
+      - discovery-server
+      - api-gateway
+#      - product-service
+#  store:
+#    build: ./refine-commerce
+#    container_name: react-store
+#    ports:
+#      - '5173:5173'
+#      - '4173:4173'
+#    command: sh -c "npm rebuild esbuild && yarn dev"
+#    volumes:
+#      - ./refine-commerce:/app
+#    stdin_open: true
+#    tty: true
